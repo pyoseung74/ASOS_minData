@@ -13,6 +13,17 @@ def get_target_files():
         return []
     return [os.path.join(input_directory, f) for f in files]
 
+def determine_file_prefix(data, file_path):
+    # 데이터에 따라 파일 접두사 결정
+    if '누적강수량(mm)' in data.columns:
+        return "ASOS_MIN" if "ASOS" in os.path.basename(file_path) else None
+    elif '강수량(mm)' in data.columns:
+        return "ASOS_HR" if "ASOS" in os.path.basename(file_path) else "AWS_HR" if "AWS" in os.path.basename(file_path) else None
+    elif '1분 강수량(mm)' in data.columns:
+        return "AWS_MIN" if "AWS" in os.path.basename(file_path) else None
+    else:
+        return None
+
 def process_file(file_path):
     # CSV 파일 불러오기
     try:
@@ -21,27 +32,31 @@ def process_file(file_path):
         print(f"파일을 불러오는데 실패했습니다. 인코딩을 확인해주세요: {file_path}")
         return
 
-    # 날짜 추출 및 파일 이름 생성
-    date_str = pd.to_datetime(data['일시'].iloc[0]).strftime('%m%d')
-    if '1분 강수량(mm)' in data.columns:
-        output_file = os.path.join(output_directory, f"AWS_MIN_{date_str}.xlsx")
-    elif '누적강수량(mm)' in data.columns:
-        output_file = os.path.join(output_directory, f"ASOS_MIN_{date_str}.xlsx")
-    else:
-        if 'AWS' in file_path:
-            output_file = os.path.join(output_directory, f"AWS_HR_{date_str}.xlsx")
-        elif 'ASOS' in file_path:
-            output_file = os.path.join(output_directory, f"ASOS_HR_{date_str}.xlsx")
+    # '일시' 열을 날짜 형식으로 변환
+    data['일시'] = pd.to_datetime(data['일시'])
 
-    # 지역별 시트를 나누고 파일 저장
-    regions = data['지점명'].unique()
+    # 파일 접두사 결정
+    file_prefix = determine_file_prefix(data, file_path)
+    if not file_prefix:
+        print(f"적절한 파일 접두사를 결정할 수 없습니다: {file_path}")
+        return
 
-    with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
+    # 날짜별로 그룹화
+    grouped = data.groupby(data['일시'].dt.date)
+
+    # 날짜별로 데이터를 저장
+    for date, group in grouped:
+        date_str = date.strftime('%Y%m%d')  # YYYYMMDD 형식
+        output_file = os.path.join(output_directory, f"{file_prefix}_{date_str}.csv")
+        
+        # 지역별로 파일 저장
+        regions = group['지점명'].unique()
         for region in regions:
-            region_data = data[data['지점명'] == region]
-            region_data.to_excel(writer, sheet_name=region, index=False)
+            region_data = group[group['지점명'] == region]
+            region_file = os.path.join(output_directory, f"{file_prefix}_{date_str}_{region}.csv")
+            region_data.to_csv(region_file, index=False, encoding='utf-8-sig')
 
-    print(f"엑셀 파일이 생성되었습니다: {output_file}")
+        print(f"CSV 파일이 생성되었습니다: {output_file}")
 
 def process_all_files():
     files = get_target_files()
